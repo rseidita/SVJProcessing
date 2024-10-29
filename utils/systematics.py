@@ -1,4 +1,6 @@
 import awkward as ak
+import correctionlib
+import numpy as np
 
 def calc_jec_variation(
         pt, eta, phi, energy,
@@ -103,3 +105,105 @@ def calc_jer_variation(
 
     corr = 1. / jer_factor * variation_jer_factor
     return pt*corr, eta, phi, energy*corr, reorder_final_to_var
+
+
+###############################
+####### PFNano section ########
+###############################
+
+
+def calc_jec_variation_PFNano(
+    events: ak.Array,
+    # jets: ak.Array,
+    year: str,
+    run: str,
+    radius: str,
+    source: str = "Nominal",
+    direction: str = "",
+    JEC_level: str = "L1L2L3Res",
+    ) -> ak.Array:
+
+    pt = events.FatJet_pt
+    eta = events.FatJet_eta
+    phi = events.FatJet_phi
+    mass = events.FatJet_mass
+    area = events.FatJet_area
+    rawFactor = events.FatJet_rawFactor
+
+    pt = pt * (1.0 - rawFactor)
+
+    # calculate all variables needed as inputs
+    rhos = events.fixedGridRhoFastjetAll
+    variables = {
+        "count": ak.num(pt),
+        "JetPt": ak.flatten(pt),
+        "JetEta": ak.flatten(eta),
+        "JetPhi": ak.flatten(phi),
+        "JetA": ak.flatten(area),
+        "Rho": ak.flatten(ak.broadcast_arrays(rhos[:, np.newaxis], pt)[0]),
+    }
+
+    evaluator = get_evaluator(year, radius)
+    jec_version = get_jec_version(year=year, radius=radius, JEC_level=JEC_level)
+
+    if jec_version in list(evaluator.compound.keys()):
+        jec = evaluate_jec(corrector=evaluator.compound[jec_version], variables=variables)
+    else:
+        jec = evaluate_jec(corrector=evaluator[jec_version], variables=variables)
+
+    if source != "Nominal" and run == "MC":
+        # TODO need to check "year" for Run3 conventions
+        allowed_sources = [
+            "Absolute",
+            f"Absolute_{year}",
+            "BBEC1",
+            f"BBEC1_{year}",
+            "EC2",
+            f"EC2_{year}",
+            "RelativeBal",
+            f"RelativeSample_{year}",
+            "HF",
+            f"HF_{year}",
+            "FlavorQCD",
+            "Total",
+        ]
+        allowed_directions = ["up", "down"]
+        if not source in allowed_sources:
+            raise ValueError(f"JEC direction is {direction}, but it can be only {allowed_sources}.")
+        if not direction in allowed_directions:
+            raise ValueError(f"JEC direction is {direction}, but it can be only {allowed_directions}.")
+        jec_version = get_jec_version(year=year, radius=radius, JEC_level=f"{source}")
+        unc = evaluate_jec(corrector=evaluator[jec_version], variables=variables)
+        unc *= -1 if direction == "down" else 1
+        jec += unc
+
+    jec = ak.unflatten(jec, counts=variables["count"])
+    pt = pt * jec
+    rawFactor = 1.0 - (1.0 / jec)
+
+    return pt, eta, phi, mass
+
+
+def get_evaluator(year, radius):
+    corr_path = "/cvmfs/cms.cern.ch/rsync/cms-nanoAOD/jsonpog-integration/POG/JME"
+    corr_path += f"/{year}"
+    corr_path += "/jet_jerc.json.gz" if int(radius) == 4 else "/fatJet_jerc.json.gz"
+
+    return correctionlib.CorrectionSet.from_file(corr_path)
+
+
+def evaluate_jec(corrector: correctionlib.CorrectionSet, variables: dict[str, ak.Array]) -> ak.Array:
+    inputs = [variables[input.name] for input in corrector.inputs]
+    return corrector.evaluate(*inputs)
+
+
+def get_jec_version(year: str, radius: str, JEC_level: str = "L1L2L3Res") -> str:
+
+    if year == "2018_UL": version = "Summer19UL18_V5_MC"
+    elif year == "2017_UL": version = "Summer19UL17_V5_MC"
+    elif year == "2016_UL": version = "Summer19UL16_V7_MC" #TODO: add 2016 APV if needed
+    else: raise ValueError("Supported years are 2016_UL, 2017_UL, and 2018_UL")
+
+    collection = "AK4PFchs" if int(radius) == 4 else "AK8PFPuppi"
+    
+    return f"{version}_{JEC_level}_{collection}"

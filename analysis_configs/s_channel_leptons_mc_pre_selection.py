@@ -8,8 +8,20 @@ from analysis_configs.met_filters import met_filters_nanoaod as met_filters
 from analysis_configs import sequences_s_channel_leptons as sequences
 
 
-def process(events, cut_flow, year, primary_dataset="", pn_tagger=False, **kwargs):
+def process(events, cut_flow, year, primary_dataset="", pn_tagger=False, variation=None, **kwargs):
     """SVJ s-channel leptons pre-selection."""
+
+    if variation:
+        # Apply JEC systematic variation
+        events = skimmer_utils.apply_variation_pfnano(
+            events,
+            variation.split("_")[0],
+            "2018_UL",
+            "MC",
+            8,
+            "Total",
+            variation.split("_")[1],
+        )
 
     # Trigger event selection
     triggers = getattr(trg, f"s_channel_{year}")

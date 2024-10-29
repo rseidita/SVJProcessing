@@ -6,7 +6,7 @@ import uproot
 
 from utils.awkward_array_utilities import as_type
 from utils.tree_maker.triggers import trigger_table as trigger_table_treemaker
-from utils.systematics import calc_jec_variation, calc_jer_variation
+from utils.systematics import calc_jec_variation, calc_jer_variation, calc_jec_variation_PFNano
 from utils.Logger import *
 
 # Needed so that ak.zip({"pt": [...], "eta": [...], "phi": [...], "mass": [...]},
@@ -585,5 +585,39 @@ def apply_pdf_variations(events):
     weight_name = "Weight" if is_tree_maker(events) else "genWeight"
     nominal_weights = events[weight_name]
     events = __add_weight_variations(events, pdf_weight_up, pdf_weight_down, nominal_weights, f"{weight_name}PDF")
+
+    return events
+
+
+def apply_variation_pfnano(events, variation, year, run, radius, source, direction):
+    if variation == "jec":
+        corrected_jets = calc_jec_variation_PFNano(
+            events,
+            # events.FatJet,
+            year,
+            run,
+            radius,
+            source,
+            direction,
+        )
+
+        jet_coll = "Jet" if radius == 4 else "FatJet"
+
+        corr_pt, corr_eta, corr_phi, corr_mass = corrected_jets
+
+        permutation = ak.argsort(corr_pt, ascending=False)
+        corr_pt = corr_pt[permutation]
+        corr_eta = corr_eta[permutation]
+        corr_phi = corr_phi[permutation]
+        corr_mass = corr_mass[permutation]
+
+        events["FatJet_pt"] = corr_pt
+        events["FatJet_eta"] = corr_eta
+        events["FatJet_phi"] = corr_phi
+        events["FatJet_mass"] = corr_mass
+
+        pf_cand_jet_idx = events[f"{jet_coll}PFCands_jetIdx"]
+        sorted_pf_cand_jet_idx = ak.Array([p[idx] for idx, p in zip(pf_cand_jet_idx, permutation)])
+        events[f"{jet_coll}PFCands_jetIdx"] = sorted_pf_cand_jet_idx
 
     return events
